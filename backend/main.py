@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from groq import Groq
 
 from services import (
-    EMOTION_JP,
+    EMOTIONS_JP,  # ⭕️ 過去のservices.pyに合わせ「S」付きの複数形に完全統一
     analyze_face_and_emotion,
     calculate_live_interest,
     calculate_voice_interest,
@@ -21,6 +21,7 @@ from services import (
 
 app = FastAPI(title="Customer Demand Analyzer")
 
+# ローカル開発環境用にCORSを全面解放
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,19 +30,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 音声データ（WAVBase64文字列）を受け取るリクエスト構造体
 class AnalysisRequest(BaseModel):
     image: str
     audio: str = ""
 
-# ⭕️ 改善：グローバル状態管理を撤廃し、完全にリクエスト内のスコープで処理を実行。
-# 同時並行リクエストが発生しても、ユーザー間でデータが混ざるリスクを100%排除しました。
+# ⭕️ 改善：就活面接対策としてグローバル状態管理（変数の競合）を完全撤廃。
+# 完全にリクエスト内のスコープで処理を実行し、スレッドセーフな設計にリファクタリング。
 
 def run_llm_inference(user_api_key, audio_bytes, emotion_scores, current_emotion):
     """別スレッドで安全にGroq APIを叩くための同期ラッパー関数"""
     try:
-        # スレッドごとに独立したGroqクライアントを生成
+        # スレッドごとに独立したGroqクライアントをその都度生成
         temp_client = Groq(api_key=user_api_key)
-        # services.pyに明示的にclientを引数で渡すように修正（clientの奪い合いを防止）
+        # services.pyに明示的にclientを引数で渡すように変更（並行処理時の奪い合いを防止）
         return generate_customer_advice(temp_client, audio_bytes, emotion_scores, current_emotion)
     except Exception as e:
         print(f"スレッド内LLM推論エラー: {e}")
@@ -66,7 +68,7 @@ async def analyze_customer(data: AnalysisRequest):
         }
 
     try:
-        # 1. 顔画像処理
+        # 1. 顔画像処理 (1.2秒間隔でDeepFaceを実行して負荷軽減)
         _, encoded = data.image.split(",", 1)
         image_bytes = base64.b64decode(encoded)
         np_array = np.frombuffer(image_bytes, dtype=np.uint8)
@@ -80,7 +82,7 @@ async def analyze_customer(data: AnalysisRequest):
             current_emotion = "neutral"
             live_interest_pct = 50.0
 
-        # 2. 音声特徴量解析
+        # 2. リアルタイム音声特徴量解析
         current_voice_interest = 0.0
         current_voice_rms = 0.0
         current_voice_pitch = 0.0
@@ -91,16 +93,18 @@ async def analyze_customer(data: AnalysisRequest):
                 _, audio_encoded = data.audio.split(",", 1)
                 audio_bytes_payload = base64.b64decode(audio_encoded)
 
+                # 音声バイナリデータが正常な場合、librosaで特徴量を抽出
                 if len(audio_bytes_payload) > 10000:
                     voice_rms, voice_pitch = extract_audio_features(audio_bytes_payload)
                     current_voice_rms = voice_rms
                     current_voice_pitch = voice_pitch
+                    # 音量とピッチの高さから「声の興奮度（関心）」を計算
                     current_voice_interest = calculate_voice_interest(voice_rms, voice_pitch)
             except Exception as audio_err:
                 print(f"音声特徴量抽出失敗: {audio_err}")
 
-        # 3. ⭕️ 非同期（スレッドプール）でのLLM接客アドバイス生成
-        # グローバルなロック変数を廃止し、独立したタスクとしてExecutor上で安全に並行実行します。
+        # 3. 非同期（スレッドプール）でのLLM接客アドバイス生成
+        # 独立したタスクとしてExecutor上で安全に並行実行させます
         loop = asyncio.get_running_loop()
         customer_advice = await loop.run_in_executor(
             None, 
@@ -111,8 +115,9 @@ async def analyze_customer(data: AnalysisRequest):
             current_emotion
         )
 
+        # フロントエンドがアニメーション表示するための全パラメータをまとめて返却
         return {
-            "dominant_emotion": EMOTION_JP.get(current_emotion, current_emotion),
+            "dominant_emotion": EMOTIONS_JP.get(current_emotion, current_emotion),  # ⭕️ 複数形に修正完了
             "emotion_scores": emotion_scores,
             "live_interest": round(live_interest_pct, 0),
             "voice_interest": round(current_voice_interest, 0),
