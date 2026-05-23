@@ -135,11 +135,11 @@ async def analyze_customer(data: AnalysisRequest):
 
         return {
             "dominant_emotion": EMOTION_MAP.get(current_emotion, current_emotion),
-            "emotion_scores": {k: float(v) for k, v in emotion_scores.items()},
-            "live_interest": round(float(live_interest_pct)),
-            "voice_interest": round(float(voice_interest)),
-            "voice_rms": float(voice_rms),
-            "voice_pitch": float(voice_pitch),
+            "emotion_scores": emotion_scores,
+            "live_interest": round(live_interest_pct),
+            "voice_interest": round(voice_interest),
+            "voice_rms": voice_rms,
+            "voice_pitch": voice_pitch,
             "customer_advice": customer_advice,
             "advice_status": "安定稼働中",
         }

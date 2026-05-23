@@ -1,33 +1,18 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
-import "./globals.css";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
-  title: "Customer Demand Analyzer",
-  description: "Real-time sales support dashboard using face and voice signals.",
+  title: "顧客心理分析",
+  description: "Real-time Sales Support Dashboard",
 };
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
   return (
-    <html
-      lang="ja"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col">{children}</body>
+    <html lang="ja">
+      <body>{children}</body>
     </html>
   );
 }

@@ -1,9 +1,0 @@
-fastapi
-uvicorn[standard]
-deepface
-opencv-python-headless
-numpy==1.26.4
-scipy
-librosa
-huggingface_hub
-groq
