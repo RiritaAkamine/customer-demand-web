@@ -1,20 +1,14 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useCamera } from "./hooks/useCamera";
 import { useAudioRecorder } from "./hooks/useAudioRecorder";
 import { useAnalysis } from "./hooks/useAnalysis";
 import type { AdviceLog } from "./hooks/types";
 
-// 環境に応じた自動URL切り替え
-const API_BASE_URL = process.env.NODE_ENV === "production"
-  ? "https://customer-demand-web.onrender.com"
-  : "http://127.0.0.1:8000";
-
 // ---------------------------------------------------------------------------
 // 定数
 // ---------------------------------------------------------------------------
-
 const EMOTION_LABELS: Record<string, string> = {
   happy: "笑顔",
   neutral: "真顔",
@@ -34,7 +28,6 @@ const EMOTION_COLORS: Record<string, string> = {
 // ---------------------------------------------------------------------------
 // ユーティリティ
 // ---------------------------------------------------------------------------
-
 function parseVerdict(advice: string): { tag: string | null; body: string } {
   const match = advice.match(/【判断[:：]\s*([^】]+)】/);
   if (!match) return { tag: null, body: advice };
@@ -61,10 +54,6 @@ const interestColor = (v: number): string =>
 
 const statusDot = (s: string): string =>
   s === "稼働中" ? "#22c55e" : s === "利用不可" ? "#ef4444" : "#f59e0b";
-
-// ---------------------------------------------------------------------------
-// サブコンポーネント
-// ---------------------------------------------------------------------------
 
 interface InterestCardProps {
   label: string;
@@ -105,15 +94,13 @@ function AdviceLogItem({ log }: AdviceLogItemProps) {
 // ---------------------------------------------------------------------------
 // ページ本体
 // ---------------------------------------------------------------------------
-
 export default function Home() {
-  // ⭕️ 状態管理にユーザー各自が画面入力したキー（apiKey）を保持するステートを追加
   const [apiKey, setApiKey] = useState("");
+  const [mediaPipeStatus, setMediaPipeStatus] = useState("ロード中");
 
   const { videoRef, canvasRef, faceMeshCanvasRef, cameraStatus, captureBase64 } = useCamera();
   const { audioCanvasRef, audioStatus, currentAudioBase64 } = useAudioRecorder();
   
-  // ⭕️ 引数に `apiKey` を追加してカスタムフック内部の定期ポーリングにキーを連動
   const {
     liveInterest,
     voiceInterest,
@@ -127,11 +114,115 @@ export default function Home() {
   } = useAnalysis({ 
     captureBase64, 
     currentAudioBase64,
-    apiKey, // 👈 Hook側の分析ループへ入力されたキーを引き渡す
+    apiKey,
   });
 
   const { tag, body } = parseVerdict(customerAdvice);
   const vs = verdictStyle(tag);
+
+  // ⭕️ 【本番環境対策】MediaPipe FaceMesh の動的ロード＆描画ロジックの追加
+  useEffect(() => {
+    let active = true;
+    let faceMeshInstance: any = null;
+    let cameraInstance: any = null;
+
+    // CDNからMediaPipeのスクリプトを安全に順序正しく読み込む関数
+    const loadScript = (src: string) => {
+      return new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = src;
+        script.crossOrigin = "anonymous";
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+    };
+
+    async function initMediaPipe() {
+      try {
+        // 1. スクリプトを順番にロード
+        if (!window.FaceMesh) {
+          await loadScript("https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js");
+        }
+        if (!window.Camera) {
+          await loadScript("https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js");
+        }
+
+        if (!active) return;
+
+        const video = videoRef.current;
+        const canvas = faceMeshCanvasRef.current;
+        if (!video || !canvas) {
+          // ビデオ要素の準備ができるまで0.5秒後にリトライ
+          setTimeout(initMediaPipe, 500);
+          return;
+        }
+
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+
+        // 2. FaceMesh の設定
+        faceMeshInstance = new window.FaceMesh({
+          locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
+        });
+
+        faceMeshInstance.setOptions({
+          maxNumFaces: 1,
+          refineLandmarks: true,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5,
+        });
+
+        // 3. 顔の点々を描画するコールバック
+        faceMeshInstance.onResults((results: any) => {
+          if (!active || !canvas || !ctx || !video) return;
+
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+          if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+            const landmarks = results.multiFaceLandmarks[0];
+            ctx.fillStyle = "#3b82f6"; // 青い点々
+
+            for (const landmark of landmarks) {
+              const x = landmark.x * canvas.width;
+              const y = landmark.y * canvas.height;
+              ctx.beginPath();
+              ctx.arc(x, y, 1.5, 0, 2 * Math.PI);
+              ctx.fill();
+            }
+          }
+        });
+
+        // 4. カメラのフレームをFaceMeshに流し込むループを起動
+        cameraInstance = new window.Camera(video, {
+          onFrame: async () => {
+            if (video && video.readyState >= 2 && faceMeshInstance) {
+              await faceMeshInstance.send({ image: video });
+            }
+          },
+          width: 640,
+          height: 480,
+        });
+
+        await cameraInstance.start();
+        setMediaPipeStatus("稼働中");
+      } catch (err) {
+        console.error("MediaPipe initialization failed:", err);
+        setMediaPipeStatus("利用不可");
+      }
+    }
+
+    // カメラが稼働中になったら初期化を開始
+    if (cameraStatus === "稼働中") {
+      initMediaPipe();
+    }
+
+    return () => {
+      active = false;
+      if (cameraInstance) cameraInstance.stop();
+      if (faceMeshInstance) faceMeshInstance.close();
+    };
+  }, [cameraStatus, videoRef, faceMeshCanvasRef]);
 
   return (
     <main style={{ height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column", background: "#f8f9fa", color: "#111827", fontFamily: "'DM Sans', 'Hiragino Sans', 'Noto Sans JP', sans-serif" }}>
@@ -142,7 +233,6 @@ export default function Home() {
           <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.05em", color: "#111827" }}>顧客心理分析</span>
           <span style={{ height: 16, width: 1, background: "#e5e7eb" }} />
           
-          {/* ⭕️ BYOK対応：画面上でユーザーが自分のGroq APIキーを入力できるフォーム */}
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 11, fontWeight: 600, color: "#6b7280" }}>Groq API Key:</span>
             <input
@@ -156,7 +246,12 @@ export default function Home() {
         </div>
         
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          {([{ label: "CAM", status: cameraStatus }, { label: "MIC", status: audioStatus }, { label: "AI", status: adviceStatus }] as const).map(({ label, status }) => (
+          {([
+            { label: "CAM", status: cameraStatus }, 
+            { label: "MESH", status: mediaPipeStatus }, // ⭕️ 点々AIのステータスを表示
+            { label: "MIC", status: audioStatus }, 
+            { label: "AI", status: adviceStatus }
+          ] as const).map(({ label, status }) => (
             <div key={label} style={{ display: "flex", alignItems: "center", gap: 5 }}>
               <span style={{ width: 6, height: 6, borderRadius: "50%", background: statusDot(status), display: "inline-block" }} />
               <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>{label}</span>
