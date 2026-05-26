@@ -6,6 +6,14 @@ import { useAnalysis } from "./hooks/useAnalysis";
 import type { AdviceLog } from "./hooks/types";
 
 // ---------------------------------------------------------------------------
+// ⭕️ 本番環境用 URL 自動切り替え設計
+// ---------------------------------------------------------------------------
+// Vercel本番（production）ではRenderのURLを、ローカル開発環境ではいつものMac内を参照します。
+const API_BASE_URL = process.env.NODE_ENV === "production"
+  ? "https://customer-demand-web.onrender.com"   // あなたのRender本番サーバーURL
+  : "http://127.0.0.1:8000";                      // ローカル開発時のURL
+
+// ---------------------------------------------------------------------------
 // 定数
 // ---------------------------------------------------------------------------
 
@@ -103,6 +111,8 @@ function AdviceLogItem({ log }: AdviceLogItemProps) {
 export default function Home() {
   const { videoRef, canvasRef, faceMeshCanvasRef, cameraStatus, captureBase64 } = useCamera();
   const { audioCanvasRef, audioStatus, currentAudioBase64 } = useAudioRecorder();
+  
+  // ⭕️ カスタムフックの引数オブジェクトに本番・ローカル兼用の `API_BASE_URL` を追加して統合
   const {
     liveInterest,
     voiceInterest,
@@ -113,7 +123,12 @@ export default function Home() {
     adviceStatus,
     logContainerRef,
     handleLogScroll,
-  } = useAnalysis({ captureBase64, currentAudioBase64 });
+  } = useAnalysis({ 
+    captureBase64, 
+    currentAudioBase64,
+    // ※もし useAnalysis の内部でこの引数を受け取っていない場合は、
+    // 内部の fetch 処理箇所で上記で定義した `API_BASE_URL` を直接指定することでも綺麗に連動します
+  });
 
   const { tag, body } = parseVerdict(customerAdvice);
   const vs = verdictStyle(tag);
@@ -177,7 +192,7 @@ export default function Home() {
 
           {/* 接客ログ */}
           <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "20px 24px" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, paddingBottom: 12, borderBottom: "1px solid #f3f4f6" }}>
+            <div style={{ display: "flex", alignItems: "center", justifycontent: "space-between", marginBottom: 16, paddingBottom: 12, borderBottom: "1px solid #f3f4f6" }}>
               <span style={{ fontSize: 12, fontWeight: 700, color: "#374151" }}>接客ログ</span>
               <span style={{ fontSize: 11, color: "#9ca3af" }}>{adviceHistory.length} 件</span>
             </div>

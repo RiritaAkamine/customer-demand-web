@@ -12,18 +12,25 @@ from pydantic import BaseModel
 from services import (
     EMOTION_MAP,
     analyze_face_emotion,
-    calculate_live_interest,  # アルゴリズムの重み付け根拠は下に記載
+    calculate_live_interest,
     extract_audio_features,
     calculate_voice_interest,
     generate_customer_advice,
 )
 
-app = FastAPI(title="Customer Demand Analyzer")
+app = FastAPI(title="Customer Demand Analyzer [Production Mode]")
 
-# ローカル開発環境用 CORS 設定（本番環境では allow_origins を絞ること）
+# ⭕️ 本番仕様：CORS（接続許可）をあなたのVercel本番URLとローカル環境のみに厳格に制限
+# ※「customer-demand-web.vercel.app」の部分は、後ほど作成するVercelの実際のプロジェクト名に合わせて調整可能です
+ALLOWED_ORIGINS = [
+    "https://customer-demand-web.vercel.app",        # あなたのVercel本番ドメイン
+    "http://localhost:3000",                          # ローカルでのテスト用
+    "http://127.0.0.1:3000",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -36,12 +43,12 @@ class AnalysisRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# ヘルスチェック
+# ヘルスチェック (Renderの生存確認・デプロイ時の起動完了検知用)
 # ---------------------------------------------------------------------------
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok"}
+    return {"status": "ok", "environment": "production"}
 
 
 # ---------------------------------------------------------------------------
@@ -62,10 +69,9 @@ async def analyze_customer(data: AnalysisRequest):
             "voice_interest": 0,
             "voice_rms": 0.0,
             "voice_pitch": 0.0,
-            # ⭕️ 修正：環境依存の「¥n」を、正しいエスケープ文字「\n」に修正して改行バグを完全治療
             "customer_advice": (
-                "【設定エラー】\n"
-                "ターミナルで export GROQ_API_KEY='your_key' を設定して再起動してください。"
+                "【環境変数エラー】\n"
+                "RenderのDashboard -> Environment設定に 'GROQ_API_KEY' が登録されているか確認してください。"
             ),
             "advice_status": "APIキー未設定",
         }
@@ -86,7 +92,7 @@ async def analyze_customer(data: AnalysisRequest):
             # 1. フラットな状態（真顔・ニュートラル）を基準値「50%」とする加算・減算モデル。
             # 2. 提案に対する強い関心やフックを意味する「驚き(surprise)」を、
             #    笑顔(happy * 1.0)よりも高い「1.2倍」の重み付けで最優先評価。
-            # 3. 顧客離れやクレームに直結する「不快・拒絶(angry)」は明確な減点要素として処理。
+            # 3. 顧客離れやクレームに直直結する「不快・拒絶(angry)」は明確な減点要素として処理。
             # これにより、接客現場の購買意欲トリガーに即した高精度なスコアリングを実現。
             live_interest_pct = calculate_live_interest(emotion_scores)
         else:
@@ -135,6 +141,7 @@ async def analyze_customer(data: AnalysisRequest):
 
         return {
             "dominant_emotion": EMOTION_MAP.get(current_emotion, current_emotion),
+            # フロント側での型エラー防止のため、すべての数値を明示的にキャスト
             "emotion_scores": {k: float(v) for k, v in emotion_scores.items()},
             "live_interest": round(float(live_interest_pct)),
             "voice_interest": round(float(voice_interest)),
