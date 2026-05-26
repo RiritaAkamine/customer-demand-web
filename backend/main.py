@@ -18,13 +18,12 @@ from services import (
     generate_customer_advice,
 )
 
-app = FastAPI(title="Customer Demand Analyzer [Production Mode]")
+app = FastAPI(title="Customer Demand Analyzer [BYOK Production Mode]")
 
-# ⭕️ 本番仕様：CORS（接続許可）をあなたのVercel本番URLとローカル環境のみに厳格に制限
-# ※「customer-demand-web.vercel.app」の部分は、後ほど作成するVercelの実際のプロジェクト名に合わせて調整可能です
+# 本番仕様のCORS制限
 ALLOWED_ORIGINS = [
-    "https://customer-demand-web.vercel.app",        # あなたのVercel本番ドメイン
-    "http://localhost:3000",                          # ローカルでのテスト用
+    "https://customer-demand-web.vercel.app",        # あなたのVercel本番URL（後ほど作成）
+    "http://localhost:3000",                          # ローカルテスト用
     "http://127.0.0.1:3000",
 ]
 
@@ -36,19 +35,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
+# ⭕️ フロントからユーザー独自のAPIキー（apiKey）を受け取れるように構造体を拡張
 class AnalysisRequest(BaseModel):
     image: str
     audio: str = ""
+    apiKey: str = ""  # 👈 ユーザー持参のキーを格納する箱
 
 
 # ---------------------------------------------------------------------------
-# ヘルスチェック (Renderの生存確認・デプロイ時の起動完了検知用)
+# ヘルスチェック (Renderの起動・生存確認用)
 # ---------------------------------------------------------------------------
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "environment": "production"}
+    return {"status": "ok", "environment": "production_byok"}
 
 
 # ---------------------------------------------------------------------------
@@ -57,10 +57,11 @@ def health_check():
 
 @app.post("/api/analyze")
 async def analyze_customer(data: AnalysisRequest):
-    # 【セキュリティ設計】
-    # フロントエンド（LocalStorageなど）でのAPIキー管理はXSSによる漏洩リスクが高いため、
-    # 完全にサーバーサイドの環境変数（os.environ）のみで秘匿情報を管理する堅牢な設計を採用。
-    api_key = os.environ.get("GROQ_API_KEY")
+    # 【セキュリティ＆BYOK設計】
+    # フロントからリクエストごとに送信されたキーを最優先で処理に使用します（サーバーに永続保存しない）。
+    # もしフロントからの入力が空の場合は、Renderの環境変数（金庫）から取得する柔軟なハイブリッド設計。
+    api_key = data.apiKey or os.environ.get("GROQ_API_KEY")
+    
     if not api_key:
         return {
             "dominant_emotion": "未始動",
@@ -70,30 +71,21 @@ async def analyze_customer(data: AnalysisRequest):
             "voice_rms": 0.0,
             "voice_pitch": 0.0,
             "customer_advice": (
-                "【環境変数エラー】\n"
-                "RenderのDashboard -> Environment設定に 'GROQ_API_KEY' が登録されているか確認してください。"
+                "【認証エラー】\n"
+                "画面上部の「Groq API Key」フォームにあなたのAPIキーを入力するか、\n"
+                "Renderの環境変数にキーを設定してください。"
             ),
             "advice_status": "APIキー未設定",
         }
 
     try:
-        # ------------------------------------------------------------------
         # 1. 顔画像デコード・感情解析
-        # ------------------------------------------------------------------
         _, encoded = data.image.split(",", 1)
         np_array = np.frombuffer(base64.b64decode(encoded), dtype=np.uint8)
         frame = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
 
         if frame is not None:
             emotion_scores, current_emotion = analyze_face_emotion(frame)
-            
-            # 【関心度計算（calculate_live_interest）のアルゴリズム設計根拠】
-            # レジ前でのディスカウント提案に対する顧客の心理変容を以下のようにモデル化。
-            # 1. フラットな状態（真顔・ニュートラル）を基準値「50%」とする加算・減算モデル。
-            # 2. 提案に対する強い関心やフックを意味する「驚き(surprise)」を、
-            #    笑顔(happy * 1.0)よりも高い「1.2倍」の重み付けで最優先評価。
-            # 3. 顧客離れやクレームに直直結する「不快・拒絶(angry)」は明確な減点要素として処理。
-            # これにより、接客現場の購買意欲トリガーに即した高精度なスコアリングを実現。
             live_interest_pct = calculate_live_interest(emotion_scores)
         else:
             emotion_scores = {
@@ -103,9 +95,7 @@ async def analyze_customer(data: AnalysisRequest):
             current_emotion = "neutral"
             live_interest_pct = 50.0
 
-        # ------------------------------------------------------------------
         # 2. 音声特徴量解析
-        # ------------------------------------------------------------------
         audio_bytes = b""
         voice_interest = 0.0
         voice_rms = 0.0
@@ -116,17 +106,14 @@ async def analyze_customer(data: AnalysisRequest):
                 _, audio_encoded = data.audio.split(",", 1)
                 audio_bytes = base64.b64decode(audio_encoded)
 
-                # 十分なデータ量がある場合のみ解析（ノイズ除去）
                 if len(audio_bytes) > 10_000:
                     voice_rms, voice_pitch = extract_audio_features(audio_bytes)
                     voice_interest = calculate_voice_interest(voice_rms, voice_pitch)
             except Exception as audio_exc:
                 print(f"[Audio] デコードエラー: {audio_exc}")
 
-        # ------------------------------------------------------------------
-        # 3. LLM 接客アドバイス生成（スレッドプールで非同期実行）
-        #    リクエストごとに独立した Groq クライアントを生成して並列安全性を確保
-        # ------------------------------------------------------------------
+        # 3. LLM 接客アドバイス生成（スレッドプール非同期）
+        # ユーザーから渡された個別のAPIキーを用いてインスタンスを動的生成し、マルチユーザー間でのデータ衝突を防止。
         groq_client = Groq(api_key=api_key)
 
         loop = asyncio.get_running_loop()
@@ -141,7 +128,6 @@ async def analyze_customer(data: AnalysisRequest):
 
         return {
             "dominant_emotion": EMOTION_MAP.get(current_emotion, current_emotion),
-            # フロント側での型エラー防止のため、すべての数値を明示的にキャスト
             "emotion_scores": {k: float(v) for k, v in emotion_scores.items()},
             "live_interest": round(float(live_interest_pct)),
             "voice_interest": round(float(voice_interest)),

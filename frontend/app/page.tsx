@@ -1,17 +1,15 @@
 "use client";
 
+import React, { useState } from "react";
 import { useCamera } from "./hooks/useCamera";
 import { useAudioRecorder } from "./hooks/useAudioRecorder";
 import { useAnalysis } from "./hooks/useAnalysis";
 import type { AdviceLog } from "./hooks/types";
 
-// ---------------------------------------------------------------------------
-// ⭕️ 本番環境用 URL 自動切り替え設計
-// ---------------------------------------------------------------------------
-// Vercel本番（production）ではRenderのURLを、ローカル開発環境ではいつものMac内を参照します。
+// 環境に応じた自動URL切り替え
 const API_BASE_URL = process.env.NODE_ENV === "production"
-  ? "https://customer-demand-web.onrender.com"   // あなたのRender本番サーバーURL
-  : "http://127.0.0.1:8000";                      // ローカル開発時のURL
+  ? "https://customer-demand-web.onrender.com"
+  : "http://127.0.0.1:8000";
 
 // ---------------------------------------------------------------------------
 // 定数
@@ -109,10 +107,13 @@ function AdviceLogItem({ log }: AdviceLogItemProps) {
 // ---------------------------------------------------------------------------
 
 export default function Home() {
+  // ⭕️ 状態管理にユーザー各自が画面入力したキー（apiKey）を保持するステートを追加
+  const [apiKey, setApiKey] = useState("");
+
   const { videoRef, canvasRef, faceMeshCanvasRef, cameraStatus, captureBase64 } = useCamera();
   const { audioCanvasRef, audioStatus, currentAudioBase64 } = useAudioRecorder();
   
-  // ⭕️ カスタムフックの引数オブジェクトに本番・ローカル兼用の `API_BASE_URL` を追加して統合
+  // ⭕️ 引数に `apiKey` を追加してカスタムフック内部の定期ポーリングにキーを連動
   const {
     liveInterest,
     voiceInterest,
@@ -126,8 +127,7 @@ export default function Home() {
   } = useAnalysis({ 
     captureBase64, 
     currentAudioBase64,
-    // ※もし useAnalysis の内部でこの引数を受け取っていない場合は、
-    // 内部の fetch 処理箇所で上記で定義した `API_BASE_URL` を直接指定することでも綺麗に連動します
+    apiKey, // 👈 Hook側の分析ループへ入力されたキーを引き渡す
   });
 
   const { tag, body } = parseVerdict(customerAdvice);
@@ -137,12 +137,24 @@ export default function Home() {
     <main style={{ height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column", background: "#f8f9fa", color: "#111827", fontFamily: "'DM Sans', 'Hiragino Sans', 'Noto Sans JP', sans-serif" }}>
 
       {/* ヘッダー */}
-      <header style={{ flexShrink: 0, background: "#fff", borderBottom: "1px solid #e5e7eb", padding: "0 32px", height: 56, display: "flex", alignItems: "center", justifyContent: "space-between", zIndex: 30 }}>
+      <header style={{ flexShrink: 0, background: "#fff", borderBottom: "1px solid #e5e7eb", padding: "0 32px", height: 64, display: "flex", alignItems: "center", justifyContent: "space-between", zIndex: 30 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
           <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.05em", color: "#111827" }}>顧客心理分析</span>
           <span style={{ height: 16, width: 1, background: "#e5e7eb" }} />
-          <span style={{ fontSize: 12, color: "#9ca3af" }}>Real-time Sales Support</span>
+          
+          {/* ⭕️ BYOK対応：画面上でユーザーが自分のGroq APIキーを入力できるフォーム */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: "#6b7280" }}>Groq API Key:</span>
+            <input
+              type="password"
+              placeholder="gsk_xxxxxxxxxxxx (未入力時はサーバー環境変数を使用)"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              style={{ padding: "6px 12px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 11, width: 260, background: "#f9fafb", color: "#111827" }}
+            />
+          </div>
         </div>
+        
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           {([{ label: "CAM", status: cameraStatus }, { label: "MIC", status: audioStatus }, { label: "AI", status: adviceStatus }] as const).map(({ label, status }) => (
             <div key={label} style={{ display: "flex", alignItems: "center", gap: 5 }}>
@@ -192,7 +204,7 @@ export default function Home() {
 
           {/* 接客ログ */}
           <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "20px 24px" }}>
-            <div style={{ display: "flex", alignItems: "center", justifycontent: "space-between", marginBottom: 16, paddingBottom: 12, borderBottom: "1px solid #f3f4f6" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, paddingBottom: 12, borderBottom: "1px solid #f3f4f6" }}>
               <span style={{ fontSize: 12, fontWeight: 700, color: "#374151" }}>接客ログ</span>
               <span style={{ fontSize: 11, color: "#9ca3af" }}>{adviceHistory.length} 件</span>
             </div>

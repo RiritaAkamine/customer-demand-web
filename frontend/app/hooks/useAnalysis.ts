@@ -3,8 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { AdviceLog, AnalysisResult } from "./types";
 
+// ⭕️ 環境判定によるAPIベースURLの定義
+// process.env.NEXT_PUBLIC_API_BASE_URL があれば最優先、本番ビルド時は自動でRenderへ切り替わります。
 const getApiBaseUrl = (): string => {
   if (process.env.NEXT_PUBLIC_API_BASE_URL) return process.env.NEXT_PUBLIC_API_BASE_URL;
+  if (process.env.NODE_ENV === "production") return "https://customer-demand-web.onrender.com"; // あなたのRender本番ドメイン
   if (typeof window === "undefined") return "http://127.0.0.1:8000";
   return `http://${window.location.hostname}:8000`;
 };
@@ -14,6 +17,7 @@ const POLL_INTERVAL_MS = 1500;
 interface UseAnalysisOptions {
   captureBase64: () => string | null;
   currentAudioBase64: string;
+  apiKey?: string; // 👈 ⭕️ ページ本体からユーザーが画面入力したキーを受け取れるように拡張
 }
 
 interface UseAnalysisReturn {
@@ -28,7 +32,7 @@ interface UseAnalysisReturn {
   handleLogScroll: () => void;
 }
 
-export function useAnalysis({ captureBase64, currentAudioBase64 }: UseAnalysisOptions): UseAnalysisReturn {
+export function useAnalysis({ captureBase64, currentAudioBase64, apiKey = "" }: UseAnalysisOptions): UseAnalysisReturn {
   const isAnalyzingRef = useRef(false);
   const logContainerRef = useRef<HTMLDivElement>(null);
   const isUserScrollingRef = useRef(false);
@@ -61,7 +65,11 @@ export function useAnalysis({ captureBase64, currentAudioBase64 }: UseAnalysisOp
         const res = await fetch(`${getApiBaseUrl()}/api/analyze`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ image: base64Image, audio: currentAudioBase64 }),
+          body: JSON.stringify({ 
+            image: base64Image, 
+            audio: currentAudioBase64,
+            apiKey: apiKey // 👈 ⭕️ 画面から入力されたキーをJSONパラメータに添えてバックエンド（Render）へ中継！
+          }),
         });
         if (!res.ok) throw new Error(`API ${res.status}`);
 
@@ -99,7 +107,7 @@ export function useAnalysis({ captureBase64, currentAudioBase64 }: UseAnalysisOp
     }, POLL_INTERVAL_MS);
 
     return () => clearInterval(timer);
-  }, [captureBase64, currentAudioBase64]);
+  }, [captureBase64, currentAudioBase64, apiKey]); # 👈 ⭕️ apiKeyの変更を検知してタイマーを安全にリスタートさせる
 
   const handleLogScroll = () => {
     const container = logContainerRef.current;
