@@ -6,7 +6,7 @@ import type { AdviceLog, AnalysisResult } from "./types";
 // 環境判定によるAPIベースURLの定義
 const getApiBaseUrl = (): string => {
   if (process.env.NEXT_PUBLIC_API_BASE_URL) return process.env.NEXT_PUBLIC_API_BASE_URL;
-  if (process.env.NODE_ENV === "production") return "https://customer-demand-web.onrender.com"; // あなたのRender本番ドメイン
+  if (process.env.NODE_ENV === "production") return "https://customer-demand-web.onrender.com";
   if (typeof window === "undefined") return "http://127.0.0.1:8000";
   return `http://${window.location.hostname}:8000`;
 };
@@ -16,7 +16,7 @@ const POLL_INTERVAL_MS = 1500;
 interface UseAnalysisOptions {
   captureBase64: () => string | null;
   currentAudioBase64: string;
-  apiKey?: string; // ページ本体からユーザーが画面入力したキーを受け取れるように拡張
+  apiKey?: string;
 }
 
 interface UseAnalysisReturn {
@@ -27,7 +27,7 @@ interface UseAnalysisReturn {
   adviceHistory: AdviceLog[];
   emotionScores: Record<string, number>;
   adviceStatus: string;
-  logContainerRef: React.RefObject<HTMLDivElement>;
+  logContainerRef: React.RefObject<HTMLDivElement | null>; // ⭕️ 型エラーを修正
   handleLogScroll: () => void;
 }
 
@@ -44,14 +44,12 @@ export function useAnalysis({ captureBase64, currentAudioBase64, apiKey = "" }: 
   const [emotionScores, setEmotionScores] = useState<Record<string, number>>({});
   const [adviceStatus, setAdviceStatus] = useState("待機中");
 
-  // 新しいログが追加されたとき、ユーザーが手動スクロール中でなければ最下部へ自動スクロール
   useEffect(() => {
     const container = logContainerRef.current;
     if (!container || isUserScrollingRef.current) return;
     container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
   }, [adviceHistory]);
 
-  // APIポーリング
   useEffect(() => {
     const timer = setInterval(async () => {
       if (isAnalyzingRef.current) return;
@@ -67,7 +65,7 @@ export function useAnalysis({ captureBase64, currentAudioBase64, apiKey = "" }: 
           body: JSON.stringify({ 
             image: base64Image, 
             audio: currentAudioBase64,
-            apiKey: apiKey // 画面から入力されたキーをJSONパラメータに添えてバックエンドへ中継
+            apiKey: apiKey 
           }),
         });
         if (!res.ok) throw new Error(`API ${res.status}`);
@@ -106,7 +104,7 @@ export function useAnalysis({ captureBase64, currentAudioBase64, apiKey = "" }: 
     }, POLL_INTERVAL_MS);
 
     return () => clearInterval(timer);
-  }, [captureBase64, currentAudioBase64, apiKey]); // apiKeyの変更を検知してタイマーを安全にリスタートさせる
+  }, [captureBase64, currentAudioBase64, apiKey]);
 
   const handleLogScroll = () => {
     const container = logContainerRef.current;
