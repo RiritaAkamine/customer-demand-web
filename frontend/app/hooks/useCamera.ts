@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 
-// ⭕️ 戻り値の型定義でRefObjectに「| null」を許容するように修正
 interface UseCameraReturn {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
@@ -17,12 +16,12 @@ export function useCamera(): UseCameraReturn {
   const faceMeshCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [cameraStatus, setCameraStatus] = useState("待機中");
 
-  // MediaPipe / カメラ初期化フラグ
   const isInitializedRef = useRef(false);
 
   useEffect(() => {
     let isMounted = true;
     let localStream: MediaStream | null = null;
+    const videoElement = videoRef.current;
 
     async function setupCamera() {
       try {
@@ -36,13 +35,17 @@ export function useCamera(): UseCameraReturn {
         }
 
         localStream = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          setCameraStatus("稼働中");
+        if (videoElement) {
+          videoElement.srcObject = stream;
+          
+          // ⭕️ 【本番環境対策】ビデオのメタデータ（解像度等）が完全に読み込まれるのを待ってから稼働状態にする
+          videoElement.onloadedmetadata = () => {
+            if (!isMounted) return;
+            videoElement.play().catch((e) => console.error("Video play failed:", e));
+            setCameraStatus("稼働中");
+            isInitializedRef.current = true;
+          };
         }
-
-        // ここで必要に応じてMediaPipe等の初期化を行う
-        isInitializedRef.current = true;
       } catch (err) {
         console.error("カメラの初期化に失敗しました:", err);
         if (isMounted) setCameraStatus("利用不可");
@@ -54,6 +57,9 @@ export function useCamera(): UseCameraReturn {
     return () => {
       isMounted = false;
       isInitializedRef.current = false;
+      if (videoElement) {
+        videoElement.onloadedmetadata = null;
+      }
       if (localStream) {
         localStream.getTracks().forEach((track) => track.stop());
       }
@@ -70,7 +76,7 @@ export function useCamera(): UseCameraReturn {
 
     if (!ctx) return null;
 
-    // ビデオの描画サイズが確定しているかチェック
+    // ビデオの描画サイズが確定しているかチェック（0の場合はスキップ）
     if (video.videoWidth === 0 || video.videoHeight === 0) return null;
 
     // キャンバスサイズをビデオに合わせる
@@ -90,7 +96,7 @@ export function useCamera(): UseCameraReturn {
 }
 
 // ---------------------------------------------------------------------------
-// MediaPipe の最低限の型定義（@types/mediapipe が存在しない場合の保険）
+// MediaPipe の最低限の型定義
 // ---------------------------------------------------------------------------
 declare global {
   interface Window {
