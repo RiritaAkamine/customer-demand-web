@@ -1,190 +1,156 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-// audiobuffer-to-wav に @types が存在しないため module 宣言で型付け
-import toWav from "audiobuffer-to-wav";
-
+// ⭕️ 【最重要】declare module（型定義）をすべての import より上に配置する
 declare module "audiobuffer-to-wav" {
   function toWav(buffer: AudioBuffer): ArrayBuffer;
-  export = toWav;
+  export default toWav;
 }
 
+import { useEffect, useRef, useState } from "react";
+import toWav from "audiobuffer-to-wav";
+
 interface UseAudioRecorderReturn {
-  audioCanvasRef: React.RefObject<HTMLCanvasElement | null>; // 型安全のために修正
+  audioCanvasRef: React.RefObject<HTMLCanvasElement | null>;
   audioStatus: string;
   currentAudioBase64: string;
 }
 
 export function useAudioRecorder(): UseAudioRecorderReturn {
-  const audioCanvasRef = useRef<HTMLCanvasElement>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const audioStreamRef = useRef<MediaStream | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const waveAnimationRef = useRef<number | null>(null);
-
-  const [audioStatus, setAudioStatus] = useState("起動中");
+  const audioCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [audioStatus, setAudioStatus] = useState("待機中");
   const [currentAudioBase64, setCurrentAudioBase64] = useState("");
 
-  useEffect(() => {
-    let cancelled = false;
-    let audioTimer: ReturnType<typeof setInterval> | null = null;
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const animationFrameRef = useRef<number | null>(null);
 
-    const setupAudio = async () => {
+  // 音声波形のリアルタイム描画ループ
+  const drawWaveform = () => {
+    if (!analyserRef.current || !audioCanvasRef.current) return;
+    const canvas = audioCanvasRef.current;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const bufferLength = analyserRef.current.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    analyserRef.current.getByteTimeDomainData(dataArray);
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#f9fafb";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#3b82f6";
+    ctx.beginPath();
+
+    const sliceWidth = canvas.width / bufferLength;
+    let x = 0;
+
+    for (let i = 0; i < bufferLength; i++) {
+      const v = dataArray[i] / 128.0;
+      const y = (v * canvas.height) / 2;
+
+      if (i === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+      x += sliceWidth;
+    }
+
+    ctx.lineTo(canvas.width, canvas.height / 2);
+    ctx.stroke();
+
+    animationFrameRef.current = requestAnimationFrame(drawWaveform);
+  };
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function initAudio() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        if (cancelled) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        audioStreamRef.current = stream;
+        if (!isMounted) return;
 
-        const AudioCtx = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-        if (!AudioCtx) throw new Error("AudioContext not supported");
+        // Web Audio APIの初期化（描画用）
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        const audioCtx = new AudioContextClass();
+        const source = audioCtx.createMediaStreamSource(stream);
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 2048;
+        source.connect(analyser);
 
-        const ctx = new AudioCtx();
-        audioContextRef.current = ctx;
+        audioContextRef.current = audioCtx;
+        analyserRef.current = analyser;
+        setAudioStatus("稼働中");
+        drawWaveform();
 
-        const src = ctx.createMediaStreamSource(stream);
-        const analyzer = ctx.createAnalyser();
-        analyzer.fftSize = 1024;
-        src.connect(analyzer);
-
-        // 波形描画ループ
-        const buf = new Uint8Array(analyzer.frequencyBinCount);
-        
-        const drawWave = () => {
-          if (cancelled) return;
-
-          const canvas = audioCanvasRef.current;
-          const c = canvas?.getContext("2d");
-          if (!canvas || !c) {
-            // まだCanvasの準備ができていない場合は次のフレームを待つ
-            waveAnimationRef.current = requestAnimationFrame(drawWave);
-            return;
-          }
-
-          waveAnimationRef.current = requestAnimationFrame(drawWave);
-          analyzer.getByteTimeDomainData(buf);
-
-          const w = canvas.width;
-          const h = canvas.height;
-
-          // ⭕ 変更点1: clearRect ではなく、親要素の背景色 (#f9fafb) でしっかり塗りつぶす
-          c.fillStyle = "#f9fafb";
-          c.fillRect(0, 0, w, h);
-
-          // ⭕ 変更点2: 完全に無音のときでも中央に綺麗な「一本の静寂線」を引くための処理
-          c.lineWidth = 2.0;       // 少し線を太くして視認性を向上
-          c.strokeStyle = "#2563eb"; // 黒(#111827)から、きれいなプライマリーブルーに変更
-          c.lineCap = "round";
-          c.lineJoin = "round";
-          
-          c.beginPath();
-
-          const sliceWidth = w / buf.length;
-          let x = 0;
-
-          for (let i = 0; i < buf.length; i++) {
-            // 音声データがフラット(128)の時、ちょうど h / 2 (真ん中) になる
-            const v = buf[i] / 128.0;
-            const y = v * (h / 2);
-
-            if (i === 0) {
-              c.moveTo(x, y);
-            } else {
-              c.lineTo(x, y);
-            }
-            x += sliceWidth;
-          }
-
-          // 最後の帳尻合わせ
-          c.lineTo(w, h / 2);
-          c.stroke();
-        };
-
-        // Canvas要素がDOMに配置されるのをほんの少しだけ待ってから描画ループを開始
-        setTimeout(() => {
-          drawWave();
-        }, 100);
-
-        // 録音・WAV変換ループ
-        const mimeType = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
-        const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-        mediaRecorderRef.current = recorder;
-
+        // サーバーに送る録音用のMediaRecorder
+        const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
         recorder.ondataavailable = (e) => {
           if (e.data.size > 0) audioChunksRef.current.push(e.data);
         };
 
         recorder.onstop = async () => {
-          if (cancelled) return;
-          if (!audioChunksRef.current.length) {
-            setCurrentAudioBase64("");
-            return;
-          }
-          const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+          const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
           audioChunksRef.current = [];
 
           try {
-            const ab = await blob.arrayBuffer();
-            if (ab.byteLength >= 5000) {
-              const decodeCtx = new AudioCtx({ sampleRate: 16000 });
-              const decoded = await decodeCtx.decodeAudioData(ab.slice(0));
-              const wavBuf = toWav(decoded);
-              const wavBlob = new Blob([new DataView(wavBuf)], { type: "audio/wav" });
-              await decodeCtx.close();
-
-              const reader = new FileReader();
-              reader.onloadend = () => {
-                if (!cancelled && reader.result) {
-                  setCurrentAudioBase64(reader.result as string);
-                }
-              };
-              reader.readAsDataURL(wavBlob);
-            } else {
-              setCurrentAudioBase64("");
+            // Web Audio APIを使ってWAV形式に変換
+            const arrayBuffer = await blob.arrayBuffer();
+            const decodedCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+            const audioBuffer = await decodedCtx.decodeAudioData(arrayBuffer);
+            const wavArrayBuffer = toWav(audioBuffer);
+            
+            // Base64にエンコードして状態更新
+            const uint8 = new Uint8Array(wavArrayBuffer);
+            let binary = "";
+            for (let i = 0; i < uint8.length; i++) {
+              binary += String.fromCharCode(uint8[i]);
             }
-          } catch (e) {
-            console.error("[Audio] WAV変換エラー:", e);
-            setCurrentAudioBase64("");
+            const base64 = btoa(binary);
+            setCurrentAudioBase64(`data:audio/wav;base64,${base64}`);
+          } catch (err) {
+            print("[AudioRecorder] WAV変換失敗:", err);
           }
 
-          // 次の録音セグメントを開始
-          if (!cancelled && mediaRecorderRef.current?.state === "inactive") {
-            try {
-              mediaRecorderRef.current.start();
-            } catch (e) {
-              console.error("[Audio] 再起動エラー:", e);
-            }
+          if (mediaRecorderRef.current && audioStatus === "稼働中") {
+            mediaRecorderRef.current.start();
           }
         };
 
+        mediaRecorderRef.current = recorder;
         recorder.start();
-        audioTimer = setInterval(() => {
-          if (mediaRecorderRef.current?.state === "recording") {
+
+        // 1.5秒ごとに区切って音声をチャンク化（useAnalysisのタイマーと同期するため自動フラッシュ）
+        const interval = setInterval(() => {
+          if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
             mediaRecorderRef.current.stop();
           }
-        }, 2000);
+        }, 1500);
 
-        setAudioStatus("稼働中");
+        return () => clearInterval(interval);
       } catch (err) {
-        console.error("[Audio] マイク初期化エラー:", err);
-        setAudioStatus("利用不可");
+        console.error("マイクの初期化に失敗しました:", err);
+        if (isMounted) setAudioStatus("利用不可");
       }
-    };
+    }
 
-    setupAudio();
+    initAudio();
 
     return () => {
-      cancelled = true;
-      if (audioTimer) clearInterval(audioTimer);
-      if (waveAnimationRef.current) cancelAnimationFrame(waveAnimationRef.current);
-      if (mediaRecorderRef.current?.state === "recording") mediaRecorderRef.current.stop();
-      audioStreamRef.current?.getTracks().forEach((t) => t.stop());
-      audioContextRef.current?.close();
+      isMounted = false;
+      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+      if (audioContextRef.current) audioContextRef.current.close();
     };
   }, []);
 
   return { audioCanvasRef, audioStatus, currentAudioBase64 };
+}
+
+// 内部ログ用の簡易ダミー
+function print(...args: any[]) {
+  console.log(...args);
 }
