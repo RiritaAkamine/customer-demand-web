@@ -1,11 +1,5 @@
 "use client";
 
-// ⭕️ 【最重要】declare module（型定義）をすべての import より上に配置する
-declare module "audiobuffer-to-wav" {
-  function toWav(buffer: AudioBuffer): ArrayBuffer;
-  export default toWav;
-}
-
 import { useEffect, useRef, useState } from "react";
 import toWav from "audiobuffer-to-wav";
 
