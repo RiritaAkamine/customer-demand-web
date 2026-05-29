@@ -4,17 +4,18 @@ import { useEffect, useRef, useState } from "react";
 import type { FaceMeshResults } from "./types";
 
 interface UseCameraReturn {
-  videoRef: React.RefObject<HTMLVideoElement>;
-  canvasRef: React.RefObject<HTMLCanvasElement>;
-  faceMeshCanvasRef: React.RefObject<HTMLCanvasElement>;
+  // 🌟 RefObject の中身に | null を追加し、実際の初期化状態と型を完全に一致させます
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  canvasRef: React.RefObject<HTMLCanvasElement | null>;
+  faceMeshCanvasRef: React.RefObject<HTMLCanvasElement | null>;
   cameraStatus: string;
   captureBase64: () => string | null;
 }
 
 export function useCamera(): UseCameraReturn {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const faceMeshCanvasRef = useRef<HTMLCanvasElement>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const faceMeshCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoStreamRef = useRef<MediaStream | null>(null);
   const animationRef = useRef<number | null>(null);
 
@@ -37,8 +38,8 @@ export function useCamera(): UseCameraReturn {
         await loadScript("https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js");
         await loadScript("https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js");
 
-        // MediaPipe はグローバルスクリプトとして提供されるため window 経由でアクセスする
-        const mpFaceMesh = (window as Window & { FaceMesh?: new (opts: object) => FaceMeshDetector }).FaceMesh;
+        // 🌟 window を any 型でキャストすることで、存在チェックとインスタンス化での型エラーを完璧に回避します
+        const mpFaceMesh = (window as any).FaceMesh;
         if (!mpFaceMesh) return;
 
         const detector = new mpFaceMesh({
@@ -116,11 +117,4 @@ export function useCamera(): UseCameraReturn {
   };
 
   return { videoRef, canvasRef, faceMeshCanvasRef, cameraStatus, captureBase64 };
-}
-
-// MediaPipe の最低限の型定義（@types/mediapipe が存在しないため自前で定義）
-interface FaceMeshDetector {
-  setOptions(opts: object): void;
-  onResults(callback: (results: FaceMeshResults) => void): void;
-  send(inputs: { image: HTMLVideoElement }): Promise<void>;
 }

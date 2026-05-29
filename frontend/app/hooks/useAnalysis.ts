@@ -24,13 +24,13 @@ interface UseAnalysisReturn {
   adviceHistory: AdviceLog[];
   emotionScores: Record<string, number>;
   adviceStatus: string;
-  logContainerRef: React.RefObject<HTMLDivElement>;
+  logContainerRef: React.RefObject<HTMLDivElement | null>; // 🌟ここを HTMLDivElement | null に修正！
   handleLogScroll: () => void;
 }
 
 export function useAnalysis({ captureBase64, currentAudioBase64 }: UseAnalysisOptions): UseAnalysisReturn {
   const isAnalyzingRef = useRef(false);
-  const logContainerRef = useRef<HTMLDivElement>(null);
+  const logContainerRef = useRef<HTMLDivElement | null>(null); // 🌟ここも型を合わせて一貫性を持たせます
   const isUserScrollingRef = useRef(false);
 
   const [liveInterest, setLiveInterest] = useState(50);

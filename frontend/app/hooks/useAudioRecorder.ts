@@ -1,22 +1,17 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-// audiobuffer-to-wav に @types が存在しないため module 宣言で型付け
+// global.d.ts が裏で型を保証してくれるため、普通にインポートしてOKになります
 import toWav from "audiobuffer-to-wav";
 
-declare module "audiobuffer-to-wav" {
-  function toWav(buffer: AudioBuffer): ArrayBuffer;
-  export = toWav;
-}
-
 interface UseAudioRecorderReturn {
-  audioCanvasRef: React.RefObject<HTMLCanvasElement | null>; // 型安全のために修正
+  audioCanvasRef: React.RefObject<HTMLCanvasElement | null>;
   audioStatus: string;
   currentAudioBase64: string;
 }
 
 export function useAudioRecorder(): UseAudioRecorderReturn {
-  const audioCanvasRef = useRef<HTMLCanvasElement>(null);
+  const audioCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const audioStreamRef = useRef<MediaStream | null>(null);
@@ -50,7 +45,6 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         analyzer.fftSize = 1024;
         src.connect(analyzer);
 
-        // 波形描画ループ
         const buf = new Uint8Array(analyzer.frequencyBinCount);
         
         const drawWave = () => {
@@ -59,7 +53,6 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
           const canvas = audioCanvasRef.current;
           const c = canvas?.getContext("2d");
           if (!canvas || !c) {
-            // まだCanvasの準備ができていない場合は次のフレームを待つ
             waveAnimationRef.current = requestAnimationFrame(drawWave);
             return;
           }
@@ -70,13 +63,11 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
           const w = canvas.width;
           const h = canvas.height;
 
-          // ⭕ 変更点1: clearRect ではなく、親要素の背景色 (#f9fafb) でしっかり塗りつぶす
           c.fillStyle = "#f9fafb";
           c.fillRect(0, 0, w, h);
 
-          // ⭕ 変更点2: 完全に無音のときでも中央に綺麗な「一本の静寂線」を引くための処理
-          c.lineWidth = 2.0;       // 少し線を太くして視認性を向上
-          c.strokeStyle = "#2563eb"; // 黒(#111827)から、きれいなプライマリーブルーに変更
+          c.lineWidth = 2.0;
+          c.strokeStyle = "#2563eb";
           c.lineCap = "round";
           c.lineJoin = "round";
           
@@ -86,7 +77,6 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
           let x = 0;
 
           for (let i = 0; i < buf.length; i++) {
-            // 音声データがフラット(128)の時、ちょうど h / 2 (真ん中) になる
             const v = buf[i] / 128.0;
             const y = v * (h / 2);
 
@@ -98,17 +88,14 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
             x += sliceWidth;
           }
 
-          // 最後の帳尻合わせ
           c.lineTo(w, h / 2);
           c.stroke();
         };
 
-        // Canvas要素がDOMに配置されるのをほんの少しだけ待ってから描画ループを開始
         setTimeout(() => {
           drawWave();
         }, 100);
 
-        // 録音・WAV変換ループ
         const mimeType = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
         const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
         mediaRecorderRef.current = recorder;
@@ -150,7 +137,6 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
             setCurrentAudioBase64("");
           }
 
-          // 次の録音セグメントを開始
           if (!cancelled && mediaRecorderRef.current?.state === "inactive") {
             try {
               mediaRecorderRef.current.start();
