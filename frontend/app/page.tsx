@@ -1,238 +1,199 @@
 "use client";
 
-import { useCamera } from "./hooks/useCamera";
-import { useAudioRecorder } from "./hooks/useAudioRecorder";
-import { useAnalysis } from "./hooks/useAnalysis";
-import type { AdviceLog } from "./hooks/types";
+import React, { useEffect, useRef, useState } from "react";
 
-// ---------------------------------------------------------------------------
-// 定数
-// ---------------------------------------------------------------------------
-
-const EMOTION_LABELS: Record<string, string> = {
-  happy: "笑顔",
-  neutral: "真顔",
-  sad: "困惑",
-  angry: "不満",
-  surprise: "驚き",
-};
-
-const EMOTION_COLORS: Record<string, string> = {
-  happy: "#16a34a",
-  neutral: "#6b7280",
-  sad: "#2563eb",
-  angry: "#dc2626",
-  surprise: "#d97706",
-};
-
-// ---------------------------------------------------------------------------
-// ユーティリティ
-// ---------------------------------------------------------------------------
-
-function parseVerdict(advice: string): { tag: string | null; body: string } {
-  const match = advice.match(/【判断[:：]\s*([^】]+)】/);
-  if (!match) return { tag: null, body: advice };
-  return { tag: match[1].trim(), body: advice.replace(match[0], "").trim() };
+// 感情スコアの型定義
+interface EmotionScores {
+  neutral: number;
+  happy: number;
+  sad: number;
+  angry: number;
+  surprise: number;
 }
 
-interface VerdictStyle {
-  bg: string;
-  text: string;
-  border: string;
-  dot: string;
-  label: string;
+// サーバーからのレスポンス型定義
+interface AnalysisResult {
+  dominant_emotion: string;
+  emotion_scores: EmotionScores;
+  live_interest: number;
+  voice_interest: number;
+  voice_rms: number;
+  voice_pitch: number;
+  customer_advice: string;
+  advice_status: string;
 }
-
-function verdictStyle(tag: string | null): VerdictStyle {
-  if (!tag)        return { bg: "#f9fafb", text: "#374151", border: "#e5e7eb", dot: "#9ca3af", label: "分析中" };
-  if (tag.includes("脈あり")) return { bg: "#f0fdf4", text: "#15803d", border: "#bbf7d0", dot: "#22c55e", label: "脈あり" };
-  if (tag.includes("脈なし")) return { bg: "#fef2f2", text: "#b91c1c", border: "#fecaca", dot: "#ef4444", label: "脈なし" };
-  return { bg: "#fffbeb", text: "#92400e", border: "#fde68a", dot: "#f59e0b", label: "様子見" };
-}
-
-const interestColor = (v: number): string =>
-  v >= 70 ? "#15803d" : v <= 40 ? "#dc2626" : "#d97706";
-
-const statusDot = (s: string): string =>
-  s === "稼働中" ? "#22c55e" : s === "利用不可" ? "#ef4444" : "#f59e0b";
-
-// ---------------------------------------------------------------------------
-// サブコンポーネント
-// ---------------------------------------------------------------------------
-
-interface InterestCardProps {
-  label: string;
-  value: number;
-}
-
-function InterestCard({ label, value }: InterestCardProps) {
-  return (
-    <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "20px 24px" }}>
-      <div style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 8 }}>{label}</div>
-      <div style={{ fontSize: 36, fontWeight: 800, color: interestColor(value) }}>
-        {value}<span style={{ fontSize: 18, fontWeight: 600, opacity: 0.6 }}>%</span>
-      </div>
-      <div style={{ marginTop: 12, height: 4, background: "#f3f4f6", borderRadius: 99, overflow: "hidden" }}>
-        <div style={{ height: "100%", width: `${value}%`, background: interestColor(value), borderRadius: 99, transition: "width 0.5s ease" }} />
-      </div>
-    </div>
-  );
-}
-
-interface AdviceLogItemProps {
-  log: AdviceLog;
-}
-
-function AdviceLogItem({ log }: AdviceLogItemProps) {
-  const lv = verdictStyle(parseVerdict(log.text).tag);
-  return (
-    <div style={{ padding: "12px 14px", borderRadius: 10, background: lv.bg, border: `1px solid ${lv.border}` }}>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-        <span style={{ fontSize: 11, fontFamily: "monospace", color: lv.text, opacity: 0.7 }}>{log.time}</span>
-        <span style={{ fontSize: 11, color: lv.text, fontWeight: 600 }}>{log.emotion}</span>
-      </div>
-      <p style={{ margin: 0, fontSize: 13, color: lv.text, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{log.text}</p>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// ページ本体
-// ---------------------------------------------------------------------------
 
 export default function Home() {
-  const { videoRef, canvasRef, faceMeshCanvasRef, cameraStatus, captureBase64 } = useCamera();
-  const { audioCanvasRef, audioStatus, currentAudioBase64 } = useAudioRecorder();
-  const {
-    liveInterest,
-    voiceInterest,
-    dominantEmotion,
-    customerAdvice,
-    adviceHistory,
-    emotionScores,
-    adviceStatus,
-    logContainerRef,
-    handleLogScroll,
-  } = useAnalysis({ captureBase64, currentAudioBase64 });
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [result, setResult] = useState<AnalysisResult | null>(null);
+  const [statusMessage, setStatusMessage] = useState("システム準備完了");
 
-  const { tag, body } = parseVerdict(customerAdvice);
-  const vs = verdictStyle(tag);
+  // カメラの初期化
+  useEffect(() => {
+    let stream: MediaStream | null = null;
+
+    async function setupCamera() {
+      try {
+        setStatusMessage("カメラを起動中...");
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 480 },
+          audio: false,
+        });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+        setStatusMessage("カメラ起動成功・分析準備完了");
+      } catch (err) {
+        console.error("カメラの起動に失敗しました:", err);
+        setStatusMessage("エラー: カメラのアクセスを許可してください");
+      }
+    }
+
+    setupCamera();
+
+    return () => {
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, []);
+
+  // 感情分析リクエストの送信処理（メインループ）
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout;
+
+    if (isAnalyzing) {
+      setStatusMessage("リアルタイム分析中...");
+      
+      intervalId = setInterval(async () => {
+        if (!videoRef.current || !canvasRef.current) return;
+
+        const video = videoRef.current;
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext("2d");
+
+        if (ctx && video.readyState === video.HAVE_ENOUGH_DATA) {
+          // キャンバスに現在のビデオフレームを描画
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+          // 現在のフレームをBase64画像化
+          const imageData = canvas.toDataURL("image/jpeg");
+
+          try {
+            // 🌟【Vercel本番環境対応のハイブリッドURL】
+            // ローカル環境なら 8000 ポートの FastAPI を直接叩き、本番（Vercel）なら Serverless Function の /api/index を叩く
+            const isLocal = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+            const apiUrl = isLocal ? "http://localhost:8000/api/analyze" : "/api/index";
+
+            const response = await fetch(apiUrl, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                image: imageData,
+                audio: "", 
+              }),
+            });
+
+            if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const data: AnalysisResult = await response.json();
+            setResult(data);
+            setStatusMessage("リアルタイム分析中...");
+          } catch (error) {
+            console.error("分析リクエストエラー:", error);
+            setStatusMessage("サーバー通信エラーが発生中");
+          }
+        }
+      }, 1000); // 1秒ごとに送信
+    } else {
+      setStatusMessage("分析停止中");
+    }
+
+    return () => clearInterval(intervalId);
+  }, [isAnalyzing]);
 
   return (
-    <main style={{ height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column", background: "#f8f9fa", color: "#111827", fontFamily: "'DM Sans', 'Hiragino Sans', 'Noto Sans JP', sans-serif" }}>
+    <main className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-6">
+      <h1 className="text-3xl font-bold mb-2">Customer Demand Analyzer</h1>
+      <p className="text-sm text-gray-400 mb-6">Status: <span className="text-green-400 font-mono">{statusMessage}</span></p>
 
-      {/* ヘッダー */}
-      <header style={{ flexShrink: 0, background: "#fff", borderBottom: "1px solid #e5e7eb", padding: "0 32px", height: 56, display: "flex", alignItems: "center", justifyContent: "space-between", zIndex: 30 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.05em", color: "#111827" }}>顧客心理分析</span>
-          <span style={{ height: 16, width: 1, background: "#e5e7eb" }} />
-          <span style={{ fontSize: 12, color: "#9ca3af" }}>Real-time Sales Support</span>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full max-w-5xl">
+        {/* 左側：カメラ映像とコントロール */}
+        <div className="flex flex-col items-center bg-gray-800 p-4 rounded-xl shadow-lg">
+          <div className="relative w-[640px] h-[480px] bg-black rounded-lg overflow-hidden mb-4">
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className="absolute top-0 left-0 w-full h-full object-cover transform scale-x-[-1]"
+            />
+            <canvas
+              ref={canvasRef}
+              width={640}
+              height={480}
+              className="absolute top-0 left-0 w-full h-full object-cover transform scale-x-[-1] pointer-events-none"
+            />
+          </div>
+
+          <button
+            onClick={() => setIsAnalyzing(!isAnalyzing)}
+            className={`w-full max-w-xs py-3 px-6 rounded-lg font-bold text-lg transition-all ${
+              isAnalyzing
+                ? "bg-red-600 hover:bg-red-700 text-white shadow-red-900/50"
+                : "bg-blue-600 hover:bg-blue-700 text-white shadow-blue-900/50"
+            } shadow-md`}
+          >
+            {isAnalyzing ? "分析を停止" : "分析を開始"}
+          </button>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          {([{ label: "CAM", status: cameraStatus }, { label: "MIC", status: audioStatus }, { label: "AI", status: adviceStatus }] as const).map(({ label, status }) => (
-            <div key={label} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: statusDot(status), display: "inline-block" }} />
-              <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>{label}</span>
-            </div>
-          ))}
-        </div>
-      </header>
 
-      {/* メインレイアウト */}
-      <div style={{ flex: 1, overflow: "hidden", maxWidth: 1280, width: "100%", margin: "0 auto", padding: "24px 32px", display: "grid", gridTemplateColumns: "1fr 340px", gap: 24, boxSizing: "border-box" as const }}>
-
-        {/* 左カラム */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 20, overflow: "hidden" }}>
-
-          {/* アドバイスカード */}
-          <div style={{ background: vs.bg, border: `1.5px solid ${vs.border}`, borderRadius: 16, padding: "28px 32px", transition: "all 0.4s ease" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-              <span style={{ width: 8, height: 8, borderRadius: "50%", background: vs.dot, display: "inline-block", boxShadow: `0 0 0 3px ${vs.dot}33` }} />
-              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: vs.text, opacity: 0.7 }}>接客アドバイス</span>
-              {tag && (
-                <span style={{ marginLeft: "auto", fontSize: 13, fontWeight: 700, padding: "4px 14px", borderRadius: 20, background: `${vs.dot}22`, color: vs.text, border: `1px solid ${vs.border}` }}>
-                  {vs.label}
-                </span>
-              )}
-            </div>
-            {tag && <div style={{ marginBottom: 12 }}><span style={{ fontSize: 22, fontWeight: 800, color: vs.text }}>{tag}</span></div>}
-            <p style={{ fontSize: 16, lineHeight: 1.75, color: vs.text, margin: 0, fontWeight: 500, whiteSpace: "pre-wrap" }}>{body || customerAdvice}</p>
-            <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${vs.border}`, display: "flex", gap: 24 }}>
-              <div>
-                <div style={{ fontSize: 11, color: vs.text, opacity: 0.6, marginBottom: 2, fontWeight: 600 }}>主感情</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: vs.text }}>{dominantEmotion}</div>
+        {/* 右側：分析結果表示ステーション */}
+        <div className="flex flex-col bg-gray-800 p-6 rounded-xl shadow-lg justify-between">
+          <div>
+            <h2 className="text-xl font-bold mb-4 border-b border-gray-700 pb-2 text-blue-400">リアルタイム分析データ</h2>
+            
+            <div className="grid grid-cols-2 gap-4 mb-6">
+              <div className="bg-gray-700/50 p-3 rounded-lg">
+                <span className="text-xs text-gray-400 block">主要感情</span>
+                <span className="text-2xl font-bold text-yellow-400">{result?.dominant_emotion || "---"}</span>
               </div>
-              <div>
-                <div style={{ fontSize: 11, color: vs.text, opacity: 0.6, marginBottom: 2, fontWeight: 600 }}>AIステータス</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: vs.text }}>{adviceStatus}</div>
+              <div className="bg-gray-700/50 p-3 rounded-lg">
+                <span className="text-xs text-gray-400 block">ライブ関心度</span>
+                <span className="text-2xl font-bold text-green-400">{result ? `${result.live_interest}%` : "---"}</span>
               </div>
             </div>
-          </div>
 
-          {/* 関心度カード */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-            <InterestCard label="表情関心度" value={liveInterest} />
-            <InterestCard label="声の関心度" value={voiceInterest} />
-          </div>
-
-          {/* 接客ログ */}
-          <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "20px 24px" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, paddingBottom: 12, borderBottom: "1px solid #f3f4f6" }}>
-              <span style={{ fontSize: 12, fontWeight: 700, color: "#374151" }}>接客ログ</span>
-              <span style={{ fontSize: 11, color: "#9ca3af" }}>{adviceHistory.length} 件</span>
-            </div>
-            <div ref={logContainerRef} onScroll={handleLogScroll} style={{ height: 240, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
-              {adviceHistory.length === 0 ? (
-                <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#d1d5db", fontSize: 13 }}>
-                  分析が始まるとここに記録されます
-                </div>
-              ) : (
-                adviceHistory.map((log) => <AdviceLogItem key={log.id} log={log} />)
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* 右カラム */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 16, overflowY: "auto" as const }}>
-
-          {/* カメラ映像 */}
-          <div style={{ background: "#000", borderRadius: 12, overflow: "hidden", position: "relative", aspectRatio: "4/3", border: "1px solid #1f2937" }}>
-            <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)", display: "block" }} />
-            <canvas ref={canvasRef} width={640} height={480} style={{ display: "none" }} />
-            <canvas ref={faceMeshCanvasRef} width={640} height={480} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "cover", pointerEvents: "none", transform: "scaleX(-1)" }} />
-            <div style={{ position: "absolute", bottom: 12, left: 12, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)", borderRadius: 8, padding: "6px 12px", border: "1px solid rgba(255,255,255,0.1)" }}>
-              <span style={{ fontSize: 12, fontWeight: 600, color: "#fff" }}>{dominantEmotion}</span>
-            </div>
-          </div>
-
-          {/* 感情分布 */}
-          <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "20px 20px" }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 14 }}>感情分布</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {(["happy", "neutral", "sad", "angry", "surprise"] as const).map((k) => {
-                const score = emotionScores[k] ?? 0;
+            {/* 各感情のスコアバー */}
+            <div className="space-y-2 mb-6">
+              <h3 className="text-sm font-semibold text-gray-300">感情分布</h3>
+              {["neutral", "happy", "sad", "angry", "surprise"].map((emotion) => {
+                const score = result?.emotion_scores[emotion as keyof EmotionScores] || 0;
                 return (
-                  <div key={k}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                      <span style={{ fontSize: 12, color: "#374151" }}>{EMOTION_LABELS[k]}</span>
-                      <span style={{ fontSize: 12, fontFamily: "monospace", color: EMOTION_COLORS[k], fontWeight: 600 }}>{score.toFixed(0)}%</span>
+                  <div key={emotion} className="flex items-center text-sm">
+                    <span className="w-20 capitalize text-gray-400">{emotion}</span>
+                    <div className="flex-1 bg-gray-700 h-3 rounded-full overflow-hidden mx-2">
+                      <div className="bg-blue-500 h-full transition-all duration-300" style={{ width: `${score}%` }} />
                     </div>
-                    <div style={{ height: 3, background: "#f3f4f6", borderRadius: 99, overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${score}%`, background: EMOTION_COLORS[k], borderRadius: 99, transition: "width 0.4s ease" }} />
-                    </div>
+                    <span className="w-12 text-right font-mono text-xs">{score.toFixed(1)}%</span>
                   </div>
                 );
               })}
             </div>
           </div>
 
-          {/* 音声波形 */}
-          <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "16px 20px" }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 10 }}>音声波形</div>
-            <div style={{ background: "#f9fafb", borderRadius: 8, overflow: "hidden", border: "1px solid #e5e7eb" }}>
-              <canvas ref={audioCanvasRef} width={400} height={72} style={{ width: "100%", height: 72, display: "block" }} />
-            </div>
+          {/* AI接客アドバイス */}
+          <div className="bg-blue-950/40 border border-blue-900/60 p-4 rounded-xl mt-auto">
+            <h3 className="text-sm font-bold text-blue-300 mb-2">🤖 AI接客アドバイス</h3>
+            <p className="text-sm text-gray-200 leading-relaxed whitespace-pre-wrap">
+              {result?.customer_advice || "カメラを起動して「分析を開始」を押すと、AIによるリアルタイム接客アドバイスがここに生成されます。"}
+            </p>
           </div>
         </div>
       </div>
