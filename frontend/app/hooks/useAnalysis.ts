@@ -3,10 +3,17 @@
 import { useEffect, useRef, useState } from "react";
 import type { AdviceLog, AnalysisResult } from "./types";
 
-const getApiBaseUrl = (): string => {
-  if (process.env.NEXT_PUBLIC_API_BASE_URL) return process.env.NEXT_PUBLIC_API_BASE_URL;
-  if (typeof window === "undefined") return "http://127.0.0.1:8000";
-  return `http://${window.location.hostname}:8000`;
+// 🌟本番環境（Vercel）とローカル環境で通信先を自動で切り替える賢いURL判定
+const getApiUrl = (): string => {
+  if (typeof window !== "undefined") {
+    const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+    if (isLocal) {
+      // 手元のMacでテストしている時は、いつもの 8000 ポートの FastAPI を叩く
+      return "http://127.0.0.1:8000/api/analyze";
+    }
+  }
+  // Vercel本番環境の時は、同じドメイン内のサーバーレス関数（/api/index）を直撃する
+  return "/api/index";
 };
 
 const POLL_INTERVAL_MS = 1500;
@@ -24,13 +31,13 @@ interface UseAnalysisReturn {
   adviceHistory: AdviceLog[];
   emotionScores: Record<string, number>;
   adviceStatus: string;
-  logContainerRef: React.RefObject<HTMLDivElement | null>; // 🌟ここを HTMLDivElement | null に修正！
+  logContainerRef: React.RefObject<HTMLDivElement | null>;
   handleLogScroll: () => void;
 }
 
 export function useAnalysis({ captureBase64, currentAudioBase64 }: UseAnalysisOptions): UseAnalysisReturn {
   const isAnalyzingRef = useRef(false);
-  const logContainerRef = useRef<HTMLDivElement | null>(null); // 🌟ここも型を合わせて一貫性を持たせます
+  const logContainerRef = useRef<HTMLDivElement | null>(null);
   const isUserScrollingRef = useRef(false);
 
   const [liveInterest, setLiveInterest] = useState(50);
@@ -58,7 +65,8 @@ export function useAnalysis({ captureBase64, currentAudioBase64 }: UseAnalysisOp
 
       isAnalyzingRef.current = true;
       try {
-        const res = await fetch(`${getApiBaseUrl()}/api/analyze`, {
+        // 🌟上で定義した自動判別URL（getApiUrl()）を使って通信を飛ばします！
+        const res = await fetch(getApiUrl(), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ image: base64Image, audio: currentAudioBase64 }),
