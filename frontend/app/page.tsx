@@ -82,8 +82,7 @@ export default function Home() {
           const imageData = canvas.toDataURL("image/jpeg");
 
           try {
-            // 🌟【Vercel本番環境対応のハイブリッドURL】
-            // ローカル環境なら 8000 ポートの FastAPI を直接叩き、本番（Vercel）なら Serverless Function の /api/index を叩く
+            // ローカル環境なら8000ポート、本番（Vercel）なら/api/indexを叩く完全設定
             const isLocal = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
             const apiUrl = isLocal ? "http://localhost:8000/api/analyze" : "/api/index";
 
@@ -104,7 +103,6 @@ export default function Home() {
 
             const data: AnalysisResult = await response.json();
             setResult(data);
-            setStatusMessage("リアルタイム分析中...");
           } catch (error) {
             console.error("分析リクエストエラー:", error);
             setStatusMessage("サーバー通信エラーが発生中");
@@ -120,13 +118,13 @@ export default function Home() {
 
   return (
     <main className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-6">
-      <h1 className="text-3xl font-bold mb-2">Customer Demand Analyzer</h1>
+      <h1 className="text-3xl font-bold mb-2 text-white">Customer Demand Analyzer</h1>
       <p className="text-sm text-gray-400 mb-6">Status: <span className="text-green-400 font-mono">{statusMessage}</span></p>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full max-w-5xl">
         {/* 左側：カメラ映像とコントロール */}
         <div className="flex flex-col items-center bg-gray-800 p-4 rounded-xl shadow-lg">
-          <div className="relative w-[640px] h-[480px] bg-black rounded-lg overflow-hidden mb-4">
+          <div className="relative w-full max-w-[640px] aspect-video bg-black rounded-lg overflow-hidden mb-4">
             <video
               ref={videoRef}
               autoPlay
