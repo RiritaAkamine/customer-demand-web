@@ -2,8 +2,8 @@ import io
 import numpy as np
 from scipy.io import wavfile
 import librosa
+import cv2
 from deepface import DeepFace
-
 
 # ---------------------------------------------------------------------------
 # 感情マップ（英語キー → 日本語ラベル）
@@ -11,7 +11,7 @@ from deepface import DeepFace
 EMOTION_MAP = {
     "happy": "笑顔・好意的",
     "sad": "困惑・戸惑い",
-    "angry": "不快・拒絶",
+    "angry": "不快・拒嫌",
     "surprise": "驚き・興味",
     "neutral": "真顔・冷静",
     "fear": "警戒",
@@ -19,20 +19,31 @@ EMOTION_MAP = {
 }
 
 # ---------------------------------------------------------------------------
-# 顔・感情解析
+# 顔・感情解析（DeepFace に完全回帰）
 # ---------------------------------------------------------------------------
 
 def analyze_face_emotion(frame: np.ndarray) -> tuple[dict, str]:
     try:
-        result = DeepFace.analyze(
-            frame,
+        # DeepFaceで感情分析を実行（検出器は軽量なOpenCVを使用）
+        results = DeepFace.analyze(
+            img_path=frame,
             actions=["emotion"],
             enforce_detection=False,
-            silent=True,
+            detector_backend="opencv"
         )
-        if isinstance(result, list):
-            result = result[0]
-        return result["emotion"], result["dominant_emotion"]
+        
+        if not results:
+            return {"neutral": 100.0}, "neutral"
+            
+        # DeepFaceは 0〜100 のパーセンテージでデータを返してくれます
+        emotion_scores = results[0]["emotion"]
+        
+        # データのキーを標準化（DeepFaceのキーをそのまま使用）
+        scaled = {k.lower(): float(v) for k, v in emotion_scores.items()}
+        
+        dominant = max(scaled, key=scaled.get)
+        return scaled, dominant
+        
     except Exception as exc:
         print(f"[DeepFace] 解析エラー: {exc}")
         return {"neutral": 100.0}, "neutral"
@@ -40,30 +51,22 @@ def analyze_face_emotion(frame: np.ndarray) -> tuple[dict, str]:
 
 def calculate_live_interest(scores: dict) -> float:
     """
-    顧客の関心度を 0〜100% でスコアリングする。
-
-    DeepFace の各感情スコアは 0〜100 の値（合計が概ね100になる割合）であるため、
-    加算前に 0.0〜1.0 の比率へ正規化し、係数を乗じることで
-    結果が 0〜100% の範囲に収まるよう設計している。
-
-    重み付けの根拠（レジ前でのディスカウント提案を想定）:
-    - 基準値: 50%（真顔・ニュートラルな状態）
-    - 驚き (surprise × 0.60): 提案へのフックを示す最重要シグナルとして最高係数
-    - 笑顔  (happy   × 0.50): 好意的な受容を示すが、驚きより控えめに評価
-    - 不快  (angry   × 0.50): 拒絶・クレームリスクとして減点
-
-    理論上の範囲:
-    - 上限: 50 + (1.0 × 50) + (1.0 × 60) − 0        = 160（クリップ → 100）
-    - 下限: 50 + 0           + 0           − (1.0 × 50) =   0（クリップ →   0）
-    各係数の入力は 0.0〜1.0 に正規化済みのため、
-    surprise が 100% なら +60、happy が 100% なら +50、angry が 100% なら −50 となる。
-    max/min で [0, 100] にクリッピングして安全性を担保。
+    全7感情のスコアをもとに関心度を 0〜100% でスコアリング。
     """
-    happy   = scores.get("happy", 0.0)   / 100.0
-    surprise = scores.get("surprise", 0.0) / 100.0
-    angry   = scores.get("angry", 0.0)   / 100.0
+    happy    = scores.get("happy",   0.0) / 100.0
+    surprise = scores.get("surprise",0.0) / 100.0
+    angry    = scores.get("angry",   0.0) / 100.0
+    fear     = scores.get("fear",    0.0) / 100.0
+    disgust  = scores.get("disgust", 0.0) / 100.0
 
-    raw = 50.0 + (happy * 50.0) + (surprise * 60.0) - (angry * 50.0)
+    raw = (
+        50.0
+        + (happy    * 50.0)
+        + (surprise * 60.0)
+        - (angry    * 50.0)
+        - (fear     * 20.0)
+        - (disgust  * 30.0)
+    )
     return max(0.0, min(100.0, raw))
 
 
@@ -118,11 +121,13 @@ def build_metrics_summary(
             voice_status = f"talking(RMS:{rms:.3f},Pitch:{pitch:.0f}Hz)"
     return (
         f"FaceMain:{current_emotion},"
-        f"H:{emotion_scores.get('happy', 0):.0f},"
-        f"N:{emotion_scores.get('neutral', 0):.0f},"
-        f"S:{emotion_scores.get('sad', 0):.0f},"
-        f"A:{emotion_scores.get('angry', 0):.0f},"
-        f"Surp:{emotion_scores.get('surprise', 0):.0f},"
+        f"Happy:{emotion_scores.get('happy',    0):.0f},"
+        f"Neutral:{emotion_scores.get('neutral', 0):.0f},"
+        f"Sad:{emotion_scores.get('sad',     0):.0f},"
+        f"Angry:{emotion_scores.get('angry',   0):.0f},"
+        f"Surprise:{emotion_scores.get('surprise',0):.0f},"
+        f"Fear:{emotion_scores.get('fear',    0):.0f},"
+        f"Disgust:{emotion_scores.get('disgust', 0):.0f},"
         f"Voice:{voice_status}"
     )
 
@@ -130,6 +135,8 @@ def build_metrics_summary(
 SYSTEM_PROMPT = (
     "You are a polite retail sales assistant AI. Analyze customer metrics at a cash register "
     "where the clerk just offered a smartphone/internet discount.\n"
+    "You receive ALL 7 emotion scores (Happy/Neutral/Sad/Angry/Surprise/Fear/Disgust) "
+    "plus voice activity. Use ALL of them holistically to judge the customer's intent.\n"
     "Output exactly 2 lines in Japanese (Desu/Masu form). No markdown, no notes.\n"
     "Line 1: 【判断: <脈あり(前向きにご興味ありです) or 脈なし(次の案内は不要のご様子です) "
     "or 様子見(冷静にご検討中されています)>】\n"
