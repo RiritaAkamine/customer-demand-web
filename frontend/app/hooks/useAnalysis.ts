@@ -3,17 +3,23 @@
 import { useEffect, useRef, useState } from "react";
 import type { AdviceLog, AnalysisResult } from "./types";
 
-// 🌟本番環境（Vercel）とローカル環境で通信先を自動で切り替える賢いURL判定
+// -----------------------------------------------------------------------
+// API URL 判定
+// ローカル  → localhost:8000 のFastAPIを直接叩く
+// 本番      → Render.comにデプロイしたFastAPIを叩く
+// -----------------------------------------------------------------------
+const RENDER_API_URL = "https://customer-demand-backend.onrender.com/api/analyze";
+
 const getApiUrl = (): string => {
   if (typeof window !== "undefined") {
-    const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+    const isLocal =
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
     if (isLocal) {
-      // 手元のMacでテストしている時は、いつもの 8000 ポートの FastAPI を叩く
       return "http://127.0.0.1:8000/api/analyze";
     }
   }
-  // Vercel本番環境の時は、同じドメイン内のサーバーレス関数（/api/index）を直撃する
-  return "/api/index";
+  return RENDER_API_URL;
 };
 
 const POLL_INTERVAL_MS = 1500;
@@ -48,14 +54,12 @@ export function useAnalysis({ captureBase64, currentAudioBase64 }: UseAnalysisOp
   const [emotionScores, setEmotionScores] = useState<Record<string, number>>({});
   const [adviceStatus, setAdviceStatus] = useState("待機中");
 
-  // 新しいログが追加されたとき、ユーザーが手動スクロール中でなければ最下部へ自動スクロール
   useEffect(() => {
     const container = logContainerRef.current;
     if (!container || isUserScrollingRef.current) return;
     container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
   }, [adviceHistory]);
 
-  // APIポーリング
   useEffect(() => {
     const timer = setInterval(async () => {
       if (isAnalyzingRef.current) return;
@@ -65,7 +69,6 @@ export function useAnalysis({ captureBase64, currentAudioBase64 }: UseAnalysisOp
 
       isAnalyzingRef.current = true;
       try {
-        // 🌟上で定義した自動判別URL（getApiUrl()）を使って通信を飛ばします！
         const res = await fetch(getApiUrl(), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
