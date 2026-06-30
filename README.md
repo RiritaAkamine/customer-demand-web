@@ -139,7 +139,7 @@ LLMは
 
 ---
 
-# 📊 データフロー
+# データフロー
 
 ```text
 Camera / Microphone
@@ -171,7 +171,7 @@ Emotion Voice Text
 
 ---
 
-# 📈 画面機能
+# 画面機能
 
 * 感情分布グラフ
 * 関心度メーター
@@ -182,7 +182,7 @@ Emotion Voice Text
 
 ---
 
-# 🛠 使用技術
+# 使用技術
 
 ## Frontend
 
